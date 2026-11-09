@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: sentriqai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentriqai
+      POSTGRES_USER: sentriqai_user
+      POSTGRES_PASSWORD: local_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - sentriqai_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentriqai_user -d sentriqai"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  sentriqai_postgres_data:
