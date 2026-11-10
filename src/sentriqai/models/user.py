@@ -10,6 +10,7 @@ from sentriqai.core.database import Base
 if TYPE_CHECKING:
     from sentriqai.models.tenant_user import TenantUser
 
+
 class User(Base):
     __tablename__ = "users"
 

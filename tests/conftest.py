@@ -1,4 +1,3 @@
-
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
@@ -13,6 +12,13 @@ from sentriqai.main import app
 
 @pytest_asyncio.fixture
 async def test_engine():
+    database_name = settings.database_url.rsplit("/", 1)[-1].split("?")[0]
+
+    if database_name != "sentriqai_test":
+        raise RuntimeError(
+            f"Tests must run against sentriqai_test. Current database: {database_name}"
+        )
+
     engine = create_async_engine(
         settings.database_url,
         pool_pre_ping=True,

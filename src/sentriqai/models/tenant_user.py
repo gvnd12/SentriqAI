@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from sentriqai.models.tenant import Tenant
     from sentriqai.models.user import User
 
+
 class TenantUser(Base):
     __tablename__ = "tenant_users"
 
