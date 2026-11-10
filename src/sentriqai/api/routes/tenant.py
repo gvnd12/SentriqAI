@@ -77,3 +77,33 @@ async def create_tenant(
         created_at=tenant.created_at,
         role=membership.role,
     )
+
+
+@tenant_router.get(
+    "", response_model=list[TenantResponse], status_code=status.HTTP_200_OK
+)
+async def list_tenant(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> list[TenantResponse]:
+
+    result = await session.execute(
+        select(Tenant, TenantUser.role)
+        .join(TenantUser, TenantUser.tenant_id == Tenant.id)
+        .where(TenantUser.user_id == current_user.id)
+        .order_by(Tenant.name.asc())
+    )
+
+    rows = result.all()
+
+    return [
+        TenantResponse(
+            id=tenant.id,
+            name=tenant.name,
+            slug=tenant.slug,
+            is_active=tenant.is_active,
+            created_at=tenant.created_at,
+            role=role,
+        )
+        for tenant, role in rows
+    ]

@@ -185,3 +185,77 @@ async def test_create_tenant_without_authentication(
     )
 
     assert response.status_code == 401
+
+@pytest.mark.asyncio
+async def test_list_tenants_with_membership_roles(client, test_engine):
+    headers = await get_auth_headers(client)
+
+    # Create the first tenant.
+    first = await client.post(
+        "/tenants",
+        headers=headers,
+        json={"name": "Alpha Security"},
+    )
+
+    # Create the second tenant.
+    second = await client.post(
+        "/tenants",
+        headers=headers,
+        json={"name": "Beta Security"},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    # Change the user's role in the second tenant to analyst.
+    session_factory = async_sessionmaker(
+        bind=test_engine,
+        expire_on_commit=False,
+    )
+
+    async with session_factory() as session:
+        membership = await session.get(
+            TenantUser,
+            (
+                UUID(second.json()["id"]),
+                UUID(
+                    decode_access_token(
+                        headers["Authorization"].removeprefix("Bearer ")
+                    )["sub"]
+                ),
+            ),
+        )
+
+        assert membership is not None
+        membership.role = "analyst"
+        await session.commit()
+
+    # Retrieve the user's tenant memberships.
+    response = await client.get("/tenants", headers=headers)
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data) == 2
+    assert [item["name"] for item in data] == [
+        "Alpha Security",
+        "Beta Security",
+    ]
+    assert data[0]["role"] == "owner"
+    assert data[1]["role"] == "analyst"
+
+@pytest.mark.asyncio
+async def test_list_tenants_when_user_has_no_memberships(client):
+    headers = await get_auth_headers(client)
+
+    response = await client.get("/tenants", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+@pytest.mark.asyncio
+async def test_list_tenants_without_authentication(client):
+    response = await client.get("/tenants")
+
+    assert response.status_code == 401
