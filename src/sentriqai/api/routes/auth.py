@@ -22,8 +22,7 @@ auth_router = APIRouter()
     "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
 )
 async def register(
-    data: RegisterRequest,
-    session: Annotated[AsyncSession, Depends(get_db)]
+    data: RegisterRequest, session: Annotated[AsyncSession, Depends(get_db)]
 ) -> User:
     email = str(data.email).lower()
 
@@ -58,8 +57,7 @@ async def register(
 
 @auth_router.post("/login", response_model=TokenResponse)
 async def login(
-    data: LoginRequest,
-    session: Annotated[AsyncSession, Depends(get_db)]
+    data: LoginRequest, session: Annotated[AsyncSession, Depends(get_db)]
 ) -> TokenResponse:
     email = str(data.email).lower()
 
