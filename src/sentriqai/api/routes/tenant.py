@@ -6,7 +6,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentriqai.core.dependencies import get_current_user, get_db
+from sentriqai.core.dependencies import (
+    CurrentTenant,
+    get_current_tenant,
+    get_current_user,
+    get_db,
+)
 from sentriqai.models import Tenant, TenantUser, User
 from sentriqai.schemas.tenant import TenantCreateRequest, TenantResponse
 
@@ -76,4 +81,53 @@ async def create_tenant(
         is_active=tenant.is_active,
         created_at=tenant.created_at,
         role=membership.role,
+    )
+
+
+@tenant_router.get(
+    "", response_model=list[TenantResponse], status_code=status.HTTP_200_OK
+)
+async def list_tenant(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> list[TenantResponse]:
+
+    result = await session.execute(
+        select(Tenant, TenantUser.role)
+        .join(TenantUser, TenantUser.tenant_id == Tenant.id)
+        .where(TenantUser.user_id == current_user.id)
+        .order_by(Tenant.name.asc())
+    )
+
+    rows = result.all()
+
+    return [
+        TenantResponse(
+            id=tenant.id,
+            name=tenant.name,
+            slug=tenant.slug,
+            is_active=tenant.is_active,
+            created_at=tenant.created_at,
+            role=role,
+        )
+        for tenant, role in rows
+    ]
+
+
+@tenant_router.get(
+    "/current", response_model=TenantResponse, status_code=status.HTTP_200_OK
+)
+async def get_current_tenant_details(
+    current_tenant: Annotated[CurrentTenant, Depends(get_current_tenant)],
+) -> TenantResponse:
+
+    tenant = current_tenant.tenant
+
+    return TenantResponse(
+        id=tenant.id,
+        name=tenant.name,
+        slug=tenant.slug,
+        is_active=tenant.is_active,
+        created_at=tenant.created_at,
+        role=current_tenant.role,
     )
