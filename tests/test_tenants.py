@@ -263,6 +263,7 @@ async def test_list_tenants_without_authentication(client):
 
     assert response.status_code == 401
 
+
 @pytest.mark.asyncio
 async def test_get_current_tenant(client: AsyncClient):
     headers = await get_auth_headers(client)
@@ -333,6 +334,7 @@ async def test_switch_between_tenants(client: AsyncClient):
     assert second_selection.status_code == 200
     assert second_selection.json()["name"] == "Second Organization"
 
+
 @pytest.mark.asyncio
 async def test_get_current_tenant_without_membership(client: AsyncClient):
     owner_headers = await get_auth_headers(client)
@@ -366,9 +368,7 @@ async def test_get_current_tenant_without_membership(client: AsyncClient):
     assert login_response.status_code == 200
 
     other_user_headers = {
-        "Authorization": (
-            f"Bearer {login_response.json()['access_token']}"
-        ),
+        "Authorization": (f"Bearer {login_response.json()['access_token']}"),
         "X-Tenant-ID": tenant_id,
     }
 
@@ -378,6 +378,7 @@ async def test_get_current_tenant_without_membership(client: AsyncClient):
     )
 
     assert response.status_code == 404
+
 
 @pytest.mark.asyncio
 async def test_get_current_tenant_without_tenant_header(
@@ -408,6 +409,7 @@ async def test_get_current_tenant_with_invalid_tenant_id(
     )
 
     assert response.status_code == 422
+
 
 @pytest.mark.asyncio
 async def test_get_current_tenant_without_authentication(
