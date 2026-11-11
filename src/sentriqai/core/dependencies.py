@@ -1,17 +1,24 @@
+from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentriqai.core.database import get_db
 from sentriqai.core.security import decode_access_token
-from sentriqai.models import User
+from sentriqai.models import Tenant, TenantUser, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+@dataclass
+class CurrentTenant:
+    tenant: Tenant
+    role: str
 
 
 def unauthorized_exception() -> HTTPException:
@@ -53,3 +60,24 @@ async def get_current_user(
         raise unauthorized_exception()
 
     return user
+
+
+async def get_current_tenant(
+    tenant_id: Annotated[UUID, Header(alias="X-Tenant-ID")],
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> CurrentTenant:
+    result = await session.execute(
+        select(Tenant, TenantUser.role)
+        .join(TenantUser, TenantUser.tenant_id == Tenant.id)
+        .where(Tenant.id == tenant_id, TenantUser.user_id == current_user.id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found!"
+        )
+
+    tenant, role = row
+
+    return CurrentTenant(tenant=tenant, role=role)
