@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sentriqai.core.database import Base
 
 if TYPE_CHECKING:
+    from sentriqai.models.log_source import LogSource
     from sentriqai.models.tenant_user import TenantUser
 
 
@@ -49,6 +50,11 @@ class Tenant(Base):
     )
 
     memberships: Mapped[list["TenantUser"]] = relationship(
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
+
+    log_sources: Mapped[list["LogSource"]] = relationship(
         back_populates="tenant",
         cascade="all, delete-orphan",
     )

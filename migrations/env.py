@@ -5,6 +5,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import sentriqai.models  # noqa: F401
 from sentriqai.core.config import settings
 from sentriqai.core.database import Base
 
