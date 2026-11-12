@@ -1,5 +1,11 @@
+from uuid import UUID
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from sentriqai.models import TenantUser, User
 
 
 async def get_auth_headers(
@@ -44,6 +50,35 @@ async def create_tenant(
     assert response.status_code == 201
 
     return response.json()["id"]
+
+
+async def add_tenant_member(
+    client: AsyncClient,
+    test_engine,
+    tenant_id: str,
+    email: str,
+    role: str,
+) -> dict[str, str]:
+    headers = await get_auth_headers(client, email=email)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        user = await session.scalar(select(User).where(User.email == email))
+
+        assert user is not None
+
+        membership = TenantUser(
+            tenant_id=UUID(tenant_id),
+            user_id=user.id,
+            role=role,
+        )
+
+        session.add(membership)
+        await session.commit()
+
+    return {
+        **headers,
+        "X-Tenant-ID": tenant_id,
+    }
 
 
 @pytest.mark.asyncio
@@ -685,3 +720,208 @@ async def test_update_log_source_cannot_change_provider_or_status(
     assert get_response.json()["name"] == "Protected Source"
     assert get_response.json()["provider"] == "splunk"
     assert get_response.json()["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_delete_log_source(client: AsyncClient):
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Delete Tenant")
+    tenant_headers = {**headers, "X-Tenant-ID": tenant_id}
+
+    create_response = await client.post(
+        "/log-sources",
+        json={"name": "Source To Delete", "provider": "splunk"},
+        headers=tenant_headers,
+    )
+
+    assert create_response.status_code == 201
+    log_source_id = create_response.json()["id"]
+
+    response = await client.delete(
+        f"/log-sources/{log_source_id}",
+        headers=tenant_headers,
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+
+    # Verify that the log source was actually deleted.
+    get_response = await client.get(
+        f"/log-sources/{log_source_id}",
+        headers=tenant_headers,
+    )
+
+    assert get_response.status_code == 404
+    assert get_response.json()["detail"] == "Log source not found."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["admin", "analyst", "viewer"])
+async def test_non_owner_cannot_delete_log_source(
+    client: AsyncClient,
+    test_engine,
+    role: str,
+):
+    owner_headers = await get_auth_headers(
+        client,
+        email="delete_owner@example.com",
+    )
+
+    tenant_id = await create_tenant(
+        client,
+        owner_headers,
+        "Owner Only Delete Tenant",
+    )
+
+    owner_tenant_headers = {
+        **owner_headers,
+        "X-Tenant-ID": tenant_id,
+    }
+
+    create_response = await client.post(
+        "/log-sources",
+        json={"name": "Protected Source", "provider": "splunk"},
+        headers=owner_tenant_headers,
+    )
+
+    assert create_response.status_code == 201
+    log_source_id = create_response.json()["id"]
+
+    member_headers = await add_tenant_member(
+        client=client,
+        test_engine=test_engine,
+        tenant_id=tenant_id,
+        email=f"{role}_delete@example.com",
+        role=role,
+    )
+
+    response = await client.delete(
+        f"/log-sources/{log_source_id}",
+        headers=member_headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Only the tenant owner can delete log sources."
+    )
+
+    # Verify that the source still exists.
+    get_response = await client.get(
+        f"/log-sources/{log_source_id}",
+        headers=owner_tenant_headers,
+    )
+
+    assert get_response.status_code == 200
+    assert get_response.json()["name"] == "Protected Source"
+
+
+@pytest.mark.asyncio
+async def test_delete_log_source_from_another_tenant_returns_404(
+    client: AsyncClient,
+):
+    owner_headers = await get_auth_headers(
+        client,
+        email="first_delete_owner@example.com",
+    )
+
+    first_tenant_id = await create_tenant(
+        client,
+        owner_headers,
+        "First Delete Tenant",
+    )
+
+    first_tenant_headers = {
+        **owner_headers,
+        "X-Tenant-ID": first_tenant_id,
+    }
+
+    create_response = await client.post(
+        "/log-sources",
+        json={"name": "Private Source", "provider": "splunk"},
+        headers=first_tenant_headers,
+    )
+
+    assert create_response.status_code == 201
+    log_source_id = create_response.json()["id"]
+
+    other_owner_headers = await get_auth_headers(
+        client,
+        email="second_delete_owner@example.com",
+    )
+
+    second_tenant_id = await create_tenant(
+        client,
+        other_owner_headers,
+        "Second Delete Tenant",
+    )
+
+    second_tenant_headers = {
+        **other_owner_headers,
+        "X-Tenant-ID": second_tenant_id,
+    }
+
+    response = await client.delete(
+        f"/log-sources/{log_source_id}",
+        headers=second_tenant_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Log source not found."
+
+    # Verify that the original source still exists.
+    get_response = await client.get(
+        f"/log-sources/{log_source_id}",
+        headers=first_tenant_headers,
+    )
+
+    assert get_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_log_source_returns_404(
+    client: AsyncClient,
+):
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(
+        client,
+        headers,
+        "Nonexistent Delete Tenant",
+    )
+
+    tenant_headers = {
+        **headers,
+        "X-Tenant-ID": tenant_id,
+    }
+
+    response = await client.delete(
+        "/log-sources/00000000-0000-0000-0000-000000000001",
+        headers=tenant_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Log source not found."
+
+
+@pytest.mark.asyncio
+async def test_delete_log_source_without_authentication(
+    client: AsyncClient,
+):
+    response = await client.delete(
+        "/log-sources/00000000-0000-0000-0000-000000000001",
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_delete_log_source_without_tenant_header(
+    client: AsyncClient,
+):
+    headers = await get_auth_headers(client)
+
+    response = await client.delete(
+        "/log-sources/00000000-0000-0000-0000-000000000001",
+        headers=headers,
+    )
+
+    assert response.status_code == 422

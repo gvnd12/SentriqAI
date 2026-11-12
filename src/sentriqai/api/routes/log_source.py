@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -172,3 +172,34 @@ async def updated_log_source(
             ) from exc
         raise
     return log_source
+
+
+@log_source_router.delete("/{log_source_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_log_source(
+    log_source_id: UUID,
+    current_tenant: Annotated[CurrentTenant, Depends(get_current_tenant)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+
+    if current_tenant.role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the tenant owner can delete log sources.",
+        )
+
+    log_source = await session.scalar(
+        select(LogSource).where(
+            LogSource.id == log_source_id,
+            LogSource.tenant_id == current_tenant.tenant.id,
+        )
+    )
+
+    if log_source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Log source not found."
+        )
+
+    await session.delete(log_source)
+    await session.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
