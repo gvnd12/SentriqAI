@@ -10,13 +10,16 @@ from sentriqai.core.database import Base
 if TYPE_CHECKING:
     from sentriqai.models.tenant import Tenant
 
+
 class LogSource(Base):
     __tablename__ = "log_sources"
 
-    __table_args__ = (CheckConstraint(
-        "status IN ('pending', 'connected', 'disconnected', 'error')",
-        name="valid_status",
-    ),)
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'connected', 'disconnected', 'error')",
+            name="valid_status",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -43,7 +46,7 @@ class LogSource(Base):
         nullable=False,
     )
 
-    tenant : Mapped["Tenant"] = relationship(back_populates="log_sources")
+    tenant: Mapped["Tenant"] = relationship(back_populates="log_sources")
 
 
 Index(
