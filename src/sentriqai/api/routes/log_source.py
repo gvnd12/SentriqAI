@@ -6,7 +6,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentriqai.core.dependencies import CurrentTenant, get_current_tenant, get_db
+from sentriqai.core.dependencies import (
+    CurrentTenant,
+    get_current_tenant,
+    get_db,
+    require_tenant_role,
+)
 from sentriqai.models import LogSource
 from sentriqai.schemas.log_source import (
     LogSourceCreateRequest,
@@ -22,7 +27,7 @@ log_source_router = APIRouter()
 )
 async def create_log_source(
     payload: LogSourceCreateRequest,
-    current_tenant: Annotated[CurrentTenant, Depends(get_current_tenant)],
+    current_tenant: Annotated[CurrentTenant, Depends(require_tenant_role("owner", "admin"))],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> LogSource:
 
@@ -114,7 +119,7 @@ async def get_log_source(
 async def updated_log_source(
     log_source_id: UUID,
     payload: LogSourceUpdateRequest,
-    current_tenant: Annotated[CurrentTenant, Depends(get_current_tenant)],
+    current_tenant: Annotated[CurrentTenant, Depends(require_tenant_role("owner", "admin"))],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> LogSource:
 
@@ -177,7 +182,7 @@ async def updated_log_source(
 @log_source_router.delete("/{log_source_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_log_source(
     log_source_id: UUID,
-    current_tenant: Annotated[CurrentTenant, Depends(get_current_tenant)],
+    current_tenant: Annotated[CurrentTenant, Depends(require_tenant_role("owner",detail="Only the tenant owner can delete log sources.",))],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
 
