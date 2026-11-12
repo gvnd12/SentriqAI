@@ -1,4 +1,3 @@
-
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -56,18 +55,20 @@ async def test_log_source_name_unique_within_tenant(test_engine):
         session.add(tenant)
         await session.flush()
 
-        session.add_all([
-            LogSource(
-                tenant_id=tenant.id,
-                name="Production Sentinel",
-                provider="microsoft_sentinel",
-            ),
-            LogSource(
-                tenant_id=tenant.id,
-                name="production sentinel",
-                provider="microsoft_sentinel",
-            ),
-        ])
+        session.add_all(
+            [
+                LogSource(
+                    tenant_id=tenant.id,
+                    name="Production Sentinel",
+                    provider="microsoft_sentinel",
+                ),
+                LogSource(
+                    tenant_id=tenant.id,
+                    name="production sentinel",
+                    provider="microsoft_sentinel",
+                ),
+            ]
+        )
 
         with pytest.raises(IntegrityError):
             await session.commit()
@@ -95,23 +96,23 @@ async def test_same_log_source_name_allowed_across_tenants(test_engine):
         session.add_all([first_tenant, second_tenant])
         await session.flush()
 
-        session.add_all([
-            LogSource(
-                tenant_id=first_tenant.id,
-                name="Production Sentinel",
-                provider="microsoft_sentinel",
-            ),
-            LogSource(
-                tenant_id=second_tenant.id,
-                name="Production Sentinel",
-                provider="microsoft_sentinel",
-            ),
-        ])
+        session.add_all(
+            [
+                LogSource(
+                    tenant_id=first_tenant.id,
+                    name="Production Sentinel",
+                    provider="microsoft_sentinel",
+                ),
+                LogSource(
+                    tenant_id=second_tenant.id,
+                    name="Production Sentinel",
+                    provider="microsoft_sentinel",
+                ),
+            ]
+        )
 
         await session.commit()
 
-        result = await session.scalar(
-            select(func.count(LogSource.id))
-        )
+        result = await session.scalar(select(func.count(LogSource.id)))
 
         assert result == 2
