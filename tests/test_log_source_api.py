@@ -109,6 +109,70 @@ async def test_create_log_source(client: AsyncClient):
     assert data["id"] is not None
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("role", "expected_status"),
+    [
+        ("admin", 201),
+        ("analyst", 403),
+        ("viewer", 403),
+    ],
+)
+async def test_create_log_source_role_permissions(
+    client: AsyncClient,
+    test_engine,
+    role: str,
+    expected_status: int,
+):
+    owner_headers = await get_auth_headers(
+        client,
+        email=f"create_owner_{role}@example.com",
+    )
+
+    tenant_id = await create_tenant(
+        client,
+        owner_headers,
+        f"Create Permission Tenant {role}",
+    )
+
+    member_headers = await add_tenant_member(
+        client=client,
+        test_engine=test_engine,
+        tenant_id=tenant_id,
+        email=f"create_member_{role}@example.com",
+        role=role,
+    )
+
+    response = await client.post(
+        "/log-sources",
+        headers=member_headers,
+        json={
+            "name": "Role Permission Source",
+            "provider": "splunk",
+        },
+    )
+
+    assert response.status_code == expected_status
+
+    if expected_status == 403:
+        assert response.json()["detail"] == (
+            "Insufficient permissions to perform this action."
+        )
+
+        # Verify that the unauthorized request created nothing.
+        list_response = await client.get(
+            "/log-sources",
+            headers=owner_headers | {"X-Tenant-ID": tenant_id},
+        )
+
+        assert list_response.status_code == 200
+        assert list_response.json() == []
+
+    else:
+        assert response.json()["name"] == "Role Permission Source"
+
+
 @pytest.mark.asyncio
 async def test_create_duplicate_log_source_returns_conflict(
     client: AsyncClient,
@@ -925,3 +989,118 @@ async def test_delete_log_source_without_tenant_header(
     )
 
     assert response.status_code == 422
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("role", "expected_status"),
+    [
+        ("admin", 200),
+        ("analyst", 403),
+        ("viewer", 403),
+    ],
+)
+async def test_update_log_source_role_permissions(
+    client: AsyncClient,
+    test_engine,
+    role: str,
+    expected_status: int,
+):
+    owner_headers = await get_auth_headers(
+        client,
+        email=f"update_owner_{role}@example.com",
+    )
+
+    tenant_id = await create_tenant(
+        client,
+        owner_headers,
+        f"Update Permission Tenant {role}",
+    )
+
+    tenant_headers = {
+        **owner_headers,
+        "X-Tenant-ID": tenant_id,
+    }
+
+    # Owner creates the source.
+    create_response = await client.post(
+        "/log-sources",
+        headers=tenant_headers,
+        json={
+            "name": "Original Permission Source",
+            "provider": "splunk",
+        },
+    )
+
+    assert create_response.status_code == 201
+
+    log_source_id = create_response.json()["id"]
+
+    # Assign the requested role to another user.
+    member_headers = await add_tenant_member(
+        client=client,
+        test_engine=test_engine,
+        tenant_id=tenant_id,
+        email=f"update_member_{role}@example.com",
+        role=role,
+    )
+
+    response = await client.patch(
+        f"/log-sources/{log_source_id}",
+        headers=member_headers,
+        json={"name": "Updated Permission Source"},
+    )
+
+    assert response.status_code == expected_status
+
+    if expected_status == 403:
+        assert response.json()["detail"] == (
+            "Insufficient permissions to perform this action."
+        )
+
+    # Verify the final state using the owner's credentials.
+    get_response = await client.get(
+        f"/log-sources/{log_source_id}",
+        headers=tenant_headers,
+    )
+
+    assert get_response.status_code == 200
+
+    expected_name = (
+        "Updated Permission Source"
+        if role == "admin"
+        else "Original Permission Source"
+    )
+
+    assert get_response.json()["name"] == expected_name
+
+
+@pytest.mark.parametrize("role", ["owner", "admin", "analyst", "viewer"])
+async def test_all_tenant_roles_can_read_log_sources(
+    client,
+    test_engine,
+    role,
+):
+    owner_headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(
+        client,
+        owner_headers,
+        "Read permissions tenant",
+    )
+
+    if role == "owner":
+        headers = owner_headers | {"X-Tenant-ID": tenant_id}
+    else:
+        headers = await add_tenant_member(
+            client,
+            test_engine,
+            tenant_id,
+            f"{role}@example.com",
+            role,
+        )
+
+    response = await client.get("/log-sources", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == []
