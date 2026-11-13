@@ -83,9 +83,16 @@ async def get_current_tenant(
 
     return CurrentTenant(tenant=tenant, role=role)
 
-def require_tenant_role(*allowed_roles:str, detail:str="Insufficient permissions to perform this action.")->Callable[..., Awaitable[CurrentTenant]]:
-    async def role_checker(current_tenant:Annotated[CurrentTenant, Depends(get_current_tenant)])->CurrentTenant:
+
+def require_tenant_role(
+    *allowed_roles: str,
+    detail: str = "Insufficient permissions to perform this action.",
+) -> Callable[..., Awaitable[CurrentTenant]]:
+    async def role_checker(
+        current_tenant: Annotated[CurrentTenant, Depends(get_current_tenant)],
+    ) -> CurrentTenant:
         if current_tenant.role not in allowed_roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
         return current_tenant
+
     return role_checker

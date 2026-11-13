@@ -109,7 +109,6 @@ async def test_create_log_source(client: AsyncClient):
     assert data["id"] is not None
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("role", "expected_status"),
@@ -991,7 +990,6 @@ async def test_delete_log_source_without_tenant_header(
     assert response.status_code == 422
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("role", "expected_status"),
@@ -1068,9 +1066,7 @@ async def test_update_log_source_role_permissions(
     assert get_response.status_code == 200
 
     expected_name = (
-        "Updated Permission Source"
-        if role == "admin"
-        else "Original Permission Source"
+        "Updated Permission Source" if role == "admin" else "Original Permission Source"
     )
 
     assert get_response.json()["name"] == expected_name
