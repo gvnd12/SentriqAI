@@ -785,9 +785,7 @@ async def test_owner_can_remove_member(
     owner_headers = await register_and_login(client, "owner@example.com")
     tenant_id = await create_test_tenant(client, owner_headers)
 
-    await add_test_member(
-        client, test_engine, tenant_id, "target@example.com", role
-    )
+    await add_test_member(client, test_engine, tenant_id, "target@example.com", role)
 
     member_id = await get_tenant_member_id(
         client, owner_headers, tenant_id, "target@example.com"
@@ -806,10 +804,7 @@ async def test_owner_can_remove_member(
         headers={**owner_headers, "X-Tenant-ID": tenant_id},
     )
     assert members_response.status_code == 200
-    assert all(
-        member["user_id"] != member_id
-        for member in members_response.json()
-    )
+    assert all(member["user_id"] != member_id for member in members_response.json())
 
 
 @pytest.mark.asyncio
@@ -825,9 +820,7 @@ async def test_admin_can_remove_analyst_or_viewer(
     admin_headers = await add_test_member(
         client, test_engine, tenant_id, "admin@example.com", "admin"
     )
-    await add_test_member(
-        client, test_engine, tenant_id, "target@example.com", role
-    )
+    await add_test_member(client, test_engine, tenant_id, "target@example.com", role)
 
     member_id = await get_tenant_member_id(
         client, admin_headers, tenant_id, "target@example.com"
@@ -845,10 +838,7 @@ async def test_admin_can_remove_analyst_or_viewer(
         "/tenants/members",
         headers={**admin_headers, "X-Tenant-ID": tenant_id},
     )
-    assert all(
-        member["user_id"] != member_id
-        for member in members_response.json()
-    )
+    assert all(member["user_id"] != member_id for member in members_response.json())
 
 
 @pytest.mark.asyncio
@@ -876,9 +866,7 @@ async def test_admin_cannot_remove_another_admin(
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"] == (
-        "Admins can only remove analysts and viewers."
-    )
+    assert response.json()["detail"] == ("Admins can only remove analysts and viewers.")
 
 
 @pytest.mark.asyncio
@@ -960,9 +948,7 @@ async def test_remove_member_from_another_tenant_returns_404(
     owner_headers = await register_and_login(client, "owner@example.com")
     first_tenant_id = await create_test_tenant(client, owner_headers)
 
-    second_owner_headers = await register_and_login(
-        client, "second_owner@example.com"
-    )
+    second_owner_headers = await register_and_login(client, "second_owner@example.com")
 
     second_tenant_response = await client.post(
         "/tenants",
