@@ -3,6 +3,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import sentriqai.models  # noqa: F401
@@ -59,7 +60,15 @@ async def run_async_migrations() -> None:
     # Use the same database URL as the application.
     # Assign directly to avoid ConfigParser interpolation issues
     # with URL-encoded characters such as %40.
-    configuration["sqlalchemy.url"] = settings.database_url
+    database_url = make_url(settings.database_url)
+
+    if database_url.database.endswith("_test"):
+        raise RuntimeError(
+            "Alembic cannot run against a test database. "
+            "Set DATABASE_URL to your development database."
+        )
+
+    configuration["sqlalchemy.url"] = database_url.render_as_string(hide_password=False)
 
     connectable = async_engine_from_config(
         configuration,
