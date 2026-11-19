@@ -1,4 +1,3 @@
-
 from uuid import UUID
 
 import pytest
@@ -32,9 +31,7 @@ async def get_auth_headers(
     )
     assert login_response.status_code == 200
 
-    return {
-        "Authorization": f"Bearer {login_response.json()['access_token']}"
-    }
+    return {"Authorization": f"Bearer {login_response.json()['access_token']}"}
 
 
 async def create_tenant(
@@ -79,7 +76,8 @@ def event_payload(
         "event_type": event_type,
         "severity": severity,
         "occurred_at": "2026-11-17T10:30:00Z",
-        "raw_event": raw_event or {
+        "raw_event": raw_event
+        or {
             "user": "demo-user",
             "source_ip": "192.0.2.10",
         },
@@ -151,7 +149,9 @@ async def test_duplicate_fingerprint_returns_existing_event(
     client: AsyncClient,
 ):
     headers = await get_auth_headers(client)
-    tenant_id = await create_tenant(client, headers, "Duplicate Fingerprint Organization")
+    tenant_id = await create_tenant(
+        client, headers, "Duplicate Fingerprint Organization"
+    )
     log_source_id = await create_log_source(client, headers, tenant_id)
     request_headers = headers | {"X-Tenant-ID": tenant_id}
 
@@ -208,16 +208,10 @@ async def test_event_from_another_tenant_returns_404(
 ):
     headers = await get_auth_headers(client)
 
-    first_tenant_id = await create_tenant(
-        client, headers, "First Event Tenant"
-    )
-    second_tenant_id = await create_tenant(
-        client, headers, "Second Event Tenant"
-    )
+    first_tenant_id = await create_tenant(client, headers, "First Event Tenant")
+    second_tenant_id = await create_tenant(client, headers, "Second Event Tenant")
 
-    log_source_id = await create_log_source(
-        client, headers, first_tenant_id
-    )
+    log_source_id = await create_log_source(client, headers, first_tenant_id)
 
     response = await client.post(
         f"/log-sources/{log_source_id}/events",
