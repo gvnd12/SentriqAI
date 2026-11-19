@@ -19,6 +19,7 @@ from sentriqai.core.database import Base
 if TYPE_CHECKING:
     from sentriqai.models.security_event import SecurityEvent
     from sentriqai.models.tenant import Tenant
+    from sentriqai.models.webhook_credentials import WebhookCredential
 
 
 class LogSource(Base):
@@ -62,6 +63,10 @@ class LogSource(Base):
     security_events: Mapped[list["SecurityEvent"]] = relationship(
         "SecurityEvent",
         back_populates="log_source",
+    )
+
+    webhook_credentials: Mapped[list["WebhookCredential"]] = relationship(
+        back_populates="log_source", passive_deletes=True
     )
 
 
