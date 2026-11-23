@@ -1,12 +1,16 @@
 import hashlib
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentriqai.models import TenantUser, User, WebhookCredential
+from sentriqai.core.dependencies import get_webhook_credential
+from sentriqai.models import SecurityEvent, TenantUser, User, WebhookCredential
+from sentriqai.services.webhook_secret import hash_webhook_secret
 
 
 async def get_auth_headers(
@@ -88,6 +92,29 @@ async def add_tenant_member(
         await session.commit()
 
     return headers | {"X-Tenant-ID": tenant_id}
+
+
+async def create_webhook_credential(
+    test_engine,
+    tenant_id: str,
+    log_source_id: str,
+    secret: str,
+    revoked: bool = False,
+) -> WebhookCredential:
+    credential = WebhookCredential(
+        tenant_id=UUID(tenant_id),
+        log_source_id=UUID(log_source_id),
+        name="Authentication Test",
+        secret_hash=hash_webhook_secret(secret),
+        revoked_at=datetime.now(UTC) if revoked else None,
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        session.add(credential)
+        await session.commit()
+        await session.refresh(credential)
+
+    return credential
 
 
 @pytest.mark.asyncio
@@ -393,3 +420,400 @@ async def test_webhook_credential_role_permissions(
         assert response.status_code == expected_admin_status
     else:
         assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_webhook_authentication_rejects_missing_secret(
+    test_engine,
+) -> None:
+    async with AsyncSession(test_engine) as session:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_webhook_credential(
+                UUID(int=0), session=session, webhook_secret=None
+            )
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_webhook_authentication_rejects_unknown_secret(
+    test_engine,
+) -> None:
+    async with AsyncSession(test_engine) as session:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_webhook_credential(
+                UUID(int=0),
+                session,
+                "whsec_invalid-secret",
+            )
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_webhook_authentication_rejects_revoked_credential(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Revoked Auth Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        "whsec_revoked-secret",
+        revoked=True,
+    )
+
+    async with AsyncSession(test_engine) as session:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_webhook_credential(
+                credential.id,
+                session,
+                "whsec_revoked-secret",
+            )
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_webhook_authentication_accepts_valid_credential(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Valid Auth Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        "whsec_valid-secret",
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        authenticated = await get_webhook_credential(
+            credential.id,
+            session,
+            "whsec_valid-secret",
+        )
+        assert authenticated.id == credential.id
+        assert str(authenticated.tenant_id) == tenant_id
+        assert str(authenticated.log_source_id) == log_source_id
+        assert authenticated.last_used_at is not None
+
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_public_webhook_creates_security_event(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Public Webhook Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    secret = "whsec_public-webhook-test-secret"
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        secret,
+    )
+
+    response = await client.post(
+        f"/webhooks/{credential.id}/events",
+        headers={"X-Webhook-Secret": secret},
+        json={
+            "external_event_id": "public-event-001",
+            "event_type": "login_failure",
+            "severity": "high",
+            "occurred_at": "2026-11-17T10:30:00Z",
+            "raw_event": {
+                "user": "demo-user",
+                "source_ip": "192.0.2.10",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+
+    data = response.json()
+    assert data["tenant_id"] == tenant_id
+    assert data["log_source_id"] == log_source_id
+    assert data["external_event_id"] == "public-event-001"
+    assert data["event_type"] == "login_failure"
+    assert data["severity"] == "high"
+    assert data["fingerprint"]
+    assert data["received_at"]
+    assert "raw_event" not in data
+
+    async with AsyncSession(test_engine) as session:
+        event = await session.scalar(
+            select(SecurityEvent).where(
+                SecurityEvent.external_event_id == "public-event-001",
+            )
+        )
+
+    assert event is not None
+    assert str(event.tenant_id) == tenant_id
+    assert str(event.log_source_id) == log_source_id
+
+
+@pytest.mark.asyncio
+async def test_public_webhook_duplicate_event_returns_existing_event(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Webhook Duplicate Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    secret = "whsec_duplicate-webhook-test-secret"
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        secret,
+    )
+
+    endpoint = f"/webhooks/{credential.id}/events"
+    webhook_headers = {"X-Webhook-Secret": secret}
+
+    payload = {
+        "external_event_id": "duplicate-public-event-001",
+        "event_type": "login_failure",
+        "severity": "high",
+        "occurred_at": "2026-11-17T10:30:00Z",
+        "raw_event": {"user": "demo-user"},
+    }
+
+    first_response = await client.post(
+        endpoint,
+        headers=webhook_headers,
+        json=payload,
+    )
+
+    second_response = await client.post(
+        endpoint,
+        headers=webhook_headers,
+        json=payload | {"severity": "critical"},
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 200
+
+    first_data = first_response.json()
+    second_data = second_response.json()
+
+    assert second_data["id"] == first_data["id"]
+    assert second_data["severity"] == "high"
+
+    async with AsyncSession(test_engine) as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(SecurityEvent)
+            .where(SecurityEvent.external_event_id == "duplicate-public-event-001")
+        )
+
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_public_webhook_rejects_missing_secret(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Missing Secret Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        "whsec_missing-secret-test",
+    )
+
+    response = await client.post(
+        f"/webhooks/{credential.id}/events",
+        json={"event_type": "login_failure", "raw_event": {}},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid webhook credentials."
+
+
+@pytest.mark.asyncio
+async def test_public_webhook_rejects_invalid_secret(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Invalid Secret Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        "whsec_correct-secret",
+    )
+
+    response = await client.post(
+        f"/webhooks/{credential.id}/events",
+        headers={"X-Webhook-Secret": "whsec_wrong-secret"},
+        json={"event_type": "login_failure", "raw_event": {}},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid webhook credentials."
+
+
+@pytest.mark.asyncio
+async def test_public_webhook_rejects_revoked_credential(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Revoked Credential Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    secret = "whsec_revoked-secret"
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        secret,
+        revoked=True,
+    )
+
+    response = await client.post(
+        f"/webhooks/{credential.id}/events",
+        headers={"X-Webhook-Secret": secret},
+        json={"event_type": "login_failure", "raw_event": {}},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid webhook credentials."
+
+
+@pytest.mark.asyncio
+async def test_public_webhook_rejects_mismatched_credential_id_and_secret(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Mismatched Credential Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    first_secret = "whsec_first-credential-secret"
+    second_secret = "whsec_second-credential-secret"
+
+    first_credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        first_secret,
+    )
+    await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        second_secret,
+    )
+
+    response = await client.post(
+        f"/webhooks/{first_credential.id}/events",
+        headers={"X-Webhook-Secret": second_secret},
+        json={
+            "event_type": "login_failure",
+            "raw_event": {"user": "demo-user"},
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid webhook credentials."
+
+
+@pytest.mark.asyncio
+async def test_public_webhook_rolls_back_last_used_at_on_identity_conflict(
+    client: AsyncClient,
+    test_engine,
+) -> None:
+    headers = await get_auth_headers(client)
+    tenant_id = await create_tenant(client, headers, "Webhook Rollback Tenant")
+    log_source_id = await create_log_source(client, headers, tenant_id)
+
+    secret = "whsec_rollback-test-secret"
+    credential = await create_webhook_credential(
+        test_engine,
+        tenant_id,
+        log_source_id,
+        secret,
+    )
+
+    endpoint = f"/webhooks/{credential.id}/events"
+    webhook_headers = {"X-Webhook-Secret": secret}
+
+    first_response = await client.post(
+        endpoint,
+        headers=webhook_headers,
+        json={
+            "external_event_id": "event-A",
+            "event_type": "login_failure",
+            "severity": "high",
+            "occurred_at": "2026-11-17T10:30:00Z",
+            "raw_event": {"user": "alice"},
+        },
+    )
+
+    second_response = await client.post(
+        endpoint,
+        headers=webhook_headers,
+        json={
+            "external_event_id": "event-B",
+            "event_type": "login_failure",
+            "severity": "high",
+            "occurred_at": "2026-11-17T10:30:00Z",
+            "raw_event": {"user": "bob"},
+        },
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+
+    async with AsyncSession(test_engine) as session:
+        last_used_before = await session.scalar(
+            select(WebhookCredential.last_used_at).where(
+                WebhookCredential.id == credential.id
+            )
+        )
+
+    assert last_used_before is not None
+
+    conflict_response = await client.post(
+        endpoint,
+        headers=webhook_headers,
+        json={
+            "external_event_id": "event-A",
+            "event_type": "login_failure",
+            "severity": "high",
+            "occurred_at": "2026-11-17T10:30:00Z",
+            "raw_event": {"user": "bob"},
+        },
+    )
+
+    assert conflict_response.status_code == 409
+
+    async with AsyncSession(test_engine) as session:
+        last_used_after = await session.scalar(
+            select(WebhookCredential.last_used_at).where(
+                WebhookCredential.id == credential.id
+            )
+        )
+
+    assert last_used_after == last_used_before

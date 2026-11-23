@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -11,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentriqai.core.database import get_db
 from sentriqai.core.security import decode_access_token
-from sentriqai.models import Tenant, TenantUser, User
+from sentriqai.models import Tenant, TenantUser, User, WebhookCredential
+from sentriqai.services.webhook_secret import hash_webhook_secret
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -96,3 +98,36 @@ def require_tenant_role(
         return current_tenant
 
     return role_checker
+
+
+async def get_webhook_credential(
+    credential_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    webhook_secret: Annotated[str | None, Header(alias="X-Webhook-Secret")] = None,
+) -> WebhookCredential:
+
+    if not webhook_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid webhook credentials.",
+        )
+
+    secret_hash = hash_webhook_secret(webhook_secret)
+
+    credential = await session.scalar(
+        select(WebhookCredential).where(
+            WebhookCredential.id == credential_id,
+            WebhookCredential.secret_hash == secret_hash,
+            WebhookCredential.revoked_at.is_(None),
+        )
+    )
+
+    if credential is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid webhook credentials.",
+        )
+
+    credential.last_used_at = datetime.now(UTC)
+
+    return credential

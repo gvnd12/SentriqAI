@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from sentriqai.api.routes.auth import auth_router
 from sentriqai.api.routes.log_source import log_source_router
+from sentriqai.api.routes.public_webhook import public_webhook_router
 from sentriqai.api.routes.security_event import security_event_router
 from sentriqai.api.routes.tenant import tenant_router
 from sentriqai.api.routes.webhook_credential import webhook_credential_router
@@ -20,6 +21,9 @@ app.include_router(
     router=webhook_credential_router,
     prefix="/log-sources",
     tags=["Webhook Credentials"],
+)
+app.include_router(
+    router=public_webhook_router, prefix="/webhooks", tags=["Public Webhooks"]
 )
 
 
